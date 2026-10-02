@@ -178,3 +178,7 @@ CLAUDE_LINK_DEBUG=1 node daemon/claude-link.mjs serve
 - Windows: delete `Claude Link.vbs` from the Startup folder, end the `node.exe`
   running `claude-link.mjs`, run `uninstall-mod`, then delete
   `%USERPROFILE%\.claude-link`.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
