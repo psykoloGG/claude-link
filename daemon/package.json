@@ -1,0 +1,16 @@
+{
+  "name": "claude-link",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Shares Claude Code chats between your machines",
+  "bin": {
+    "claude-link": "./claude-link.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/core.test.mjs test/sync.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
