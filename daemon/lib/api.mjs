@@ -3,8 +3,9 @@ import { promises as fs } from 'node:fs'
 import http from 'node:http'
 
 import { readBundleInfo } from './bundle.mjs'
-import { LINK_VERSION } from './config.mjs'
+import { LINK_VERSION, instanceScope } from './config.mjs'
 import { debug } from './log.mjs'
+import { ROOT_HEADER, clientMatches } from './profile.mjs'
 import { buildTurns, contextBlock, findSnippet, mainBranch, parseSlim, readSlim, turnsToMarkdown } from './render.mjs'
 import { clip } from './slim.mjs'
 
@@ -42,8 +43,10 @@ function isTrue(value) {
 
 // The mod's door to the daemon: loopback only, and every request carries the
 // local token from config.json. Requests from a browser page (they send an
-// Origin header) are refused outright.
-export function startLocalApi({ config, store, sync }) {
+// Origin header) are refused outright. A request must also come from a Claude
+// session of the profile this instance serves (see clientMatches), so a mod
+// running in another profile is told so instead of being answered.
+export function startLocalApi({ config, store, sync, boundRoot }) {
   const expected = Buffer.from(`Bearer ${config.localToken}`)
   const isAuthorized = request => {
     const given = Buffer.from(String(request.headers.authorization ?? ''))
@@ -65,6 +68,10 @@ export function startLocalApi({ config, store, sync }) {
     try {
       if (request.headers.origin || !isAuthorized(request)) {
         sendJson(response, 401, { error: 'Not authorized' })
+        return
+      }
+      if (!(await clientMatches(config, boundRoot, request.headers[ROOT_HEADER]))) {
+        sendJson(response, 409, { error: 'This Claude profile is not the one this Claude Link instance serves. Enroll this profile with "claude-link profile enroll" and load its own mod.' })
         return
       }
       const url = new URL(request.url ?? '/', 'http://127.0.0.1')
@@ -96,6 +103,7 @@ async function status(store, sync) {
   return {
     version: LINK_VERSION,
     machine: { id: store.selfId, name: store.config.machineName },
+    profile: { scope: instanceScope(store.config) },
     build: await readBundleInfo(),
     indexing: store.indexing,
     counts: { local, remote },

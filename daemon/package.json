@@ -9,7 +9,7 @@
     "claude-link": "./claude-link.mjs"
   },
   "scripts": {
-    "test": "node --test test/core.test.mjs test/sync.test.mjs"
+    "test": "node --test test/core.test.mjs test/sync.test.mjs test/profile.test.mjs"
   },
   "engines": {
     "node": ">=22"

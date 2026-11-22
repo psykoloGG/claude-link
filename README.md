@@ -100,6 +100,15 @@ the other follows within a minute:
 node daemon/claude-link.mjs publish
 ```
 
+### More than one Claude profile
+
+If you run several Claude profiles on a machine (separate `CLAUDE_CONFIG_DIR`
+folders, for example from claude-multiprofile), each one can get its own,
+separately paired Claude Link instance, so `/link` in a profile only shows that
+profile's chats from your other machines. It is opt in and leaves the default
+setup unchanged; see [docs/profiles.md](docs/profiles.md) for setup, status and
+rollback.
+
 ## Commands
 
 | Command | What it does |
@@ -112,6 +121,9 @@ node daemon/claude-link.mjs publish
 | `status` | Shows machines, routes, last sync and each machine's build |
 | `publish [--from <folder>]` | Installs the project's daemon and mod as the newest build |
 | `install-mod` / `uninstall-mod` | Loads or stops loading the mod in Claude Code |
+| `profile enroll --scope <s> ...` / `profile status --scope <s>` | Sets up or checks an instance for one Claude profile ([docs/profiles.md](docs/profiles.md)) |
+
+Add `--scope <s>` to any other command to run it for that profile's instance.
 
 ## Configuration
 
@@ -163,7 +175,7 @@ them from its `~/.claude-link/chats`.
 ## Development
 
 ```bash
-cd daemon && npm test            # unit tests plus a two-daemon sync test
+cd daemon && npm test            # unit tests, a two-daemon sync test and the profile isolation tests
 CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test mod   # draws the pane on desktop and terminal
 claude plugin validate mod
 CLAUDE_LINK_DEBUG=1 node daemon/claude-link.mjs serve

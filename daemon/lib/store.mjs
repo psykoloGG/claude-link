@@ -79,7 +79,13 @@ function gitRemote(cwd) {
   })
 }
 
-function appSessionsDir() {
+// Where the desktop app keeps its Code session titles. A named profile uses
+// the folder recorded when it was enrolled (none for a Code-only profile),
+// never the default app's, so its titles cannot mix with the default ones.
+function appSessionsDir(config) {
+  if (config.profile) {
+    return config.profile.desktopSessionsDir || ''
+  }
   if (process.platform === 'darwin') {
     return path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions')
   }
@@ -376,8 +382,12 @@ export class ChatStore {
       return
     }
     this.appTitlesAt = Date.now()
-    const root = appSessionsDir()
+    const root = appSessionsDir(this.config)
     const titles = new Map()
+    if (!root) {
+      this.appTitles = titles
+      return
+    }
     for (const account of await listNames(root, true)) {
       for (const organization of await listNames(path.join(root, account), true)) {
         const folder = path.join(root, account, organization)

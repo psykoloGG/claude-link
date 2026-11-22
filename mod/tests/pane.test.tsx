@@ -91,3 +91,31 @@ test('the All view groups chats by project and expands a group', async ($, on) =
     await ui.unmount()
   }
 })
+
+// A session of another Claude profile (CLAUDE_CONFIG_DIR set, no
+// CLAUDE_LINK_HOME of its own) is told to enroll that profile; it never falls
+// back to the default instance's config or asks any daemon.
+test('a session of an unenrolled profile never reaches the default instance', async ($, on) => {
+  let fetches = 0
+  let reads = 0
+  on('clock.now', () => ({ value: 1000 }))
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : e.name === 'CLAUDE_CONFIG_DIR' ? `${HOME}/.claude-work` : undefined }))
+  on('fs.exists', () => ({ value: true }))
+  on('fs.read', () => {
+    reads += 1
+    return { value: JSON.stringify({ localPort: 47600, localToken: 'default-token' }) }
+  })
+  on('session.root', () => ({ value: `${HOME}/Desktop/Projects/Notes` }))
+  on('http.fetch', () => {
+    fetches += 1
+    return { value: { status: 200, ok: true, headers: {}, text: '{}' } }
+  })
+
+  const ui = await $.ui.mount({ plugin: 'claude-link', surface: 'terminal', component: 'Pane', requestId: 'link', props: PANE_PROPS })
+  await ui.press({ key: 'scope-all' })
+  const texts = await ui.findAll({ type: 'Text' })
+  expect(texts.some(text => String(text.props.children ?? '').includes('no Claude Link instance of its own'))).toBe(true)
+  expect(fetches).toBe(0)
+  expect(reads).toBe(0)
+  await ui.unmount()
+})

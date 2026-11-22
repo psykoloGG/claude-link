@@ -15,12 +15,17 @@ export const Channel = Object.freeze({
   Beacon: 'beacon',
 })
 
-export function deriveKey(linkKey) {
+// The default instance keeps the original derivation, so it still talks to
+// machines on the previous version. A named profile mixes its sync scope in,
+// so a message sealed for one profile never opens in another, even if the
+// same link key ended up in both by mistake.
+export function deriveKey(linkKey, scope = '') {
   const secret = Buffer.from(linkKey ?? '', 'base64url')
   if (secret.length < MIN_LINK_KEY_BYTES) {
     throw new Error('The link key in config.json is missing or too short')
   }
-  const derived = hkdfSync('sha256', secret, Buffer.from('claude-link'), Buffer.from('claude-link/v1/aes-256-gcm'), 32)
+  const info = scope ? `claude-link/v1/aes-256-gcm/scope:${scope}` : 'claude-link/v1/aes-256-gcm'
+  const derived = hkdfSync('sha256', secret, Buffer.from('claude-link'), Buffer.from(info), 32)
   return Buffer.from(derived)
 }
 

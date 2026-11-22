@@ -3,6 +3,8 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import { profileHome, profilesRoot, rootsOverlap, validateScope } from './profile.mjs'
+
 export const LINK_VERSION = '0.2.0'
 
 export const Ports = Object.freeze({
@@ -14,6 +16,9 @@ export const Ports = Object.freeze({
 export const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const PAIR_CODE_PREFIX = 'clink1.'
+// Codes for a named profile use their own prefix, so a version that predates
+// profiles refuses them instead of joining them as its default link.
+const SCOPED_PAIR_CODE_PREFIX = 'clinkp1.'
 
 function defaults() {
   return {
@@ -35,6 +40,11 @@ export function linkHome() {
 
 export function configPath() {
   return path.join(linkHome(), 'config.json')
+}
+
+// The sync scope of a named profile instance, or '' for the default one.
+export function instanceScope(config) {
+  return typeof config?.profile?.scope === 'string' ? config.profile.scope : ''
 }
 
 export function claudeHome(config) {
@@ -68,7 +78,26 @@ export async function loadConfig() {
   if (!ID_PATTERN.test(config.machineId ?? '') || !config.linkKey || !config.localToken) {
     throw new Error(`${configPath()} is missing machineId, linkKey or localToken`)
   }
+  checkInstancePlacement(config)
   return config
+}
+
+// A named profile's config only counts in that profile's own folder, and the
+// default config never inside the profiles folder, so a copied or moved
+// config.json cannot quietly serve (or pair) the wrong profile.
+export function checkInstancePlacement(config) {
+  const here = path.resolve(linkHome())
+  if (config.profile) {
+    validateScope(config.profile.scope)
+    if (here !== path.resolve(profileHome(config.profile.scope))) {
+      throw new Error(`This config belongs to the "${config.profile.scope}" profile but sits in another folder; not using it.`)
+    }
+    if (!config.claudeDir || !config.profile.codeDir) {
+      throw new Error(`The "${config.profile.scope}" profile config has no Claude Code folder; re-enroll it.`)
+    }
+  } else if (rootsOverlap(here, path.resolve(profilesRoot()))) {
+    throw new Error('A config without a profile sits in the profiles folder; not using it.')
+  }
 }
 
 // Written through a temp file so a crash never leaves a half-written config,
@@ -118,17 +147,43 @@ function isPrivateAddress(address) {
 export function makePairCode(config) {
   const urls = lanAddresses().map(address => `http://${address}:${config.peerPort}`)
   const payload = { key: config.linkKey, name: config.machineName, id: config.machineId, urls }
-  return PAIR_CODE_PREFIX + Buffer.from(JSON.stringify(payload)).toString('base64url')
+  const scope = instanceScope(config)
+  if (!scope) {
+    return PAIR_CODE_PREFIX + Buffer.from(JSON.stringify(payload)).toString('base64url')
+  }
+  return SCOPED_PAIR_CODE_PREFIX + Buffer.from(JSON.stringify({ ...payload, scope, peerPort: config.peerPort })).toString('base64url')
 }
 
+// Returns the payload with `scope` set ('' for a default-instance code).
 export function readPairCode(code) {
   const trimmed = (code ?? '').trim()
-  if (!trimmed.startsWith(PAIR_CODE_PREFIX)) {
+  const prefix = [SCOPED_PAIR_CODE_PREFIX, PAIR_CODE_PREFIX].find(candidate => trimmed.startsWith(candidate))
+  if (!prefix) {
     throw new Error('That is not a Claude Link pairing code')
   }
-  const payload = JSON.parse(Buffer.from(trimmed.slice(PAIR_CODE_PREFIX.length), 'base64url').toString('utf8'))
-  if (typeof payload.key !== 'string' || typeof payload.name !== 'string' || !Array.isArray(payload.urls)) {
+  let payload = null
+  try {
+    payload = JSON.parse(Buffer.from(trimmed.slice(prefix.length), 'base64url').toString('utf8'))
+  } catch {
+    throw new Error('The pairing code is damaged')
+  }
+  if (typeof payload?.key !== 'string' || typeof payload.name !== 'string' || !Array.isArray(payload.urls)) {
     throw new Error('The pairing code is incomplete')
   }
-  return payload
+  const isScoped = prefix === SCOPED_PAIR_CODE_PREFIX
+  if (isScoped !== (typeof payload.scope === 'string' && payload.scope !== '')) {
+    throw new Error('The pairing code is incomplete')
+  }
+  return { ...payload, scope: isScoped ? payload.scope : '' }
+}
+
+// A pairing code only joins the instance of the same profile: a default code
+// joins the default instance, a scoped code only the instance with that scope.
+export function checkPairScope(config, payload) {
+  const mine = instanceScope(config)
+  if (payload.scope === mine) {
+    return
+  }
+  const describe = scope => (scope ? `the "${scope}" profile` : 'the default profile')
+  throw new Error(`That pairing code is for ${describe(payload.scope)}, but this is ${describe(mine)}. Run join for the matching profile (--scope), nothing was changed.`)
 }

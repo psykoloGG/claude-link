@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import net from 'node:net'
 
 import { bundleHash, formatBuild, installBundle, installedFiles, isNewer, readBundleInfo, validateFiles } from './bundle.mjs'
-import { ID_PATTERN, Ports, saveConfig } from './config.mjs'
+import { ID_PATTERN, Ports, instanceScope, saveConfig } from './config.mjs'
 import { debug } from './log.mjs'
 import { PeerOp, callPeer } from './peer.mjs'
 import { chatKey, isValidChat } from './store.mjs'
@@ -114,6 +114,15 @@ class SshForward {
   }
 }
 
+// The scope-bound key already keeps profiles apart; this also refuses a
+// hello that names another profile, so a mistake shows up as a clear error.
+function checkRemoteScope(config, hello) {
+  const remote = typeof hello?.scope === 'string' ? hello.scope : ''
+  if (remote !== instanceScope(config)) {
+    throw new Error('answered for a different Claude profile')
+  }
+}
+
 // Keeps chats in step with every linked machine it can reach: pulls what the
 // other side has that is newer, then offers ours. Since a laptop can usually
 // reach an always-on desktop but not the other way round, the side that
@@ -199,7 +208,9 @@ export class SyncEngine {
       }
     }
     if (peer.config?.ssh) {
-      routes.push({ kind: RouteKind.Ssh, host: peer.config.ssh, remotePort: peer.config.sshPort || Ports.Peer })
+      // A named profile never falls back to the default instance's port.
+      const fallbackPort = instanceScope(this.config) ? this.config.peerPort : Ports.Peer
+      routes.push({ kind: RouteKind.Ssh, host: peer.config.ssh, remotePort: peer.config.sshPort || fallbackPort })
     }
     return routes
   }
@@ -298,11 +309,12 @@ export class SyncEngine {
         const url = route.kind === RouteKind.Ssh ? await this.forwardFor(route).open() : route.url
         const connection = { url, headers: route.headers, route }
         const timeoutMs = route.kind === RouteKind.Ssh ? SSH_HELLO_TIMEOUT_MS : HELLO_TIMEOUT_MS
-        const hello = await this.call(connection, PeerOp.Hello, { machine: this.store.selfInfo(), live: await this.store.liveSessions(), build: await readBundleInfo() }, timeoutMs)
+        const hello = await this.call(connection, PeerOp.Hello, { machine: this.store.selfInfo(), live: await this.store.liveSessions(), build: await readBundleInfo(), ...this.scopeField() }, timeoutMs)
         const remote = hello?.machine
         if (!ID_PATTERN.test(remote?.machineId ?? '') || remote.machineId === this.config.machineId) {
           throw new Error('answered as an unexpected machine')
         }
+        checkRemoteScope(this.config, hello)
         connection.remote = remote
         connection.build = readBuild(hello.build)
         status.build = connection.build
@@ -318,6 +330,12 @@ export class SyncEngine {
       }
     }
     throw new Error(errors.join('; '))
+  }
+
+  // The default instance says nothing extra, exactly like earlier versions.
+  scopeField() {
+    const scope = instanceScope(this.config)
+    return scope ? { scope } : {}
   }
 
   async rememberMachineId(peer, remote) {
@@ -444,10 +462,11 @@ export class SyncEngine {
     const store = this.store
     const handlers = {
       [PeerOp.Hello]: async (args, { from }) => {
+        checkRemoteScope(this.config, args)
         store.recordMachine({ ...(args.machine ?? {}), machineId: from })
         store.recordLive(from, args.live)
         this.inboundBuilds.set(from, readBuild(args.build))
-        return { machine: store.selfInfo(), live: await store.liveSessions(), build: await readBundleInfo() }
+        return { machine: store.selfInfo(), live: await store.liveSessions(), build: await readBundleInfo(), ...this.scopeField() }
       },
       [PeerOp.Bundle]: async () => ({ ...(await readBundleInfo()), files: await installedFiles() }),
       [PeerOp.InstallBundle]: async (args, { from }) => {

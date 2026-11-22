@@ -17,6 +17,8 @@ const GROUP_PREVIEW = 5
 const PANE_TURNS = 40
 const CONTEXT_MAX_CHARS = 24000
 const SETUP_HINT = 'Claude Link is not set up on this machine. Run "node daemon/claude-link.mjs init" (or "join") from the Claude Link folder, then start the daemon.'
+const PROFILE_HINT = 'This Claude profile has no Claude Link instance of its own. Enroll it with "claude-link profile enroll --scope <scope> ..." and install its mod with --scope; other profiles\' chats are never shown here.'
+const ROOT_HEADER = 'x-claude-link-root'
 const MACHINE_COLORS = ['suggestion', 'claude', 'permission', 'warning']
 
 // Row styling that mirrors the app's session sidebar. The grays read on both
@@ -50,7 +52,7 @@ const errorState = atom({ plugin: 'claude-link', key: 'error' } as const, '')
 
 // ---- Daemon API ----
 
-type Connection = { baseUrl: string; token: string }
+type Connection = { baseUrl: string; token: string; root: string }
 
 type ApiPeer = { machineId: string; name: string; isOnline: boolean; route: string; lastSyncAt: number; lastError: string }
 type ApiStatus = { machine: { name: string }; peers: ApiPeer[]; counts: { local: number; remote: number }; indexing: { isRunning: boolean; done: number; total: number } }
@@ -73,25 +75,47 @@ function queryString(values: Record<string, string>): string {
     .join('&')
 }
 
-async function connection($: EngineInterface): Promise<Connection | null> {
+function trimSlashes(folder: string): string {
+  return folder.replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
+// Which Claude Link instance this session talks to. A session of a named
+// profile (CLAUDE_CONFIG_DIR set to a folder other than ~/.claude) only uses
+// the instance its own settings name in CLAUDE_LINK_HOME; it never falls back
+// to the default instance or looks for other profiles. The daemon checks the
+// root sent with every request as well, so a copied settings file still
+// cannot reach another profile's chats.
+async function resolveLink($: EngineInterface): Promise<{ link: Connection } | { hint: string }> {
   const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''
-  const linkHome = (await $.env.get('CLAUDE_LINK_HOME')) ?? `${home}/.claude-link`
+  const configDir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? ''
+  const explicitHome = (await $.env.get('CLAUDE_LINK_HOME')) ?? ''
+  const isDefaultRoot = !configDir || trimSlashes(configDir) === trimSlashes(`${home}/.claude`)
+  if (!explicitHome && !isDefaultRoot) {
+    return { hint: PROFILE_HINT }
+  }
+  const linkHome = explicitHome || `${home}/.claude-link`
   const file = `${linkHome}/config.json`
   if (!(await $.fs.exists(file))) {
-    return null
+    return { hint: isDefaultRoot ? SETUP_HINT : PROFILE_HINT }
   }
   const config = JSON.parse(await $.fs.read(file)) as { localPort?: number; localToken?: string }
-  return { baseUrl: `http://127.0.0.1:${config.localPort ?? DEFAULT_LOCAL_PORT}`, token: String(config.localToken ?? '') }
+  return { link: { baseUrl: `http://127.0.0.1:${config.localPort ?? DEFAULT_LOCAL_PORT}`, token: String(config.localToken ?? ''), root: configDir } }
+}
+
+async function connection($: EngineInterface): Promise<Connection | null> {
+  const resolved = await resolveLink($)
+  return 'link' in resolved ? resolved.link : null
 }
 
 async function api<T>($: EngineInterface, path: string, method = 'GET'): Promise<T> {
-  const link = await connection($)
-  if (!link) {
-    throw new LinkError(SETUP_HINT)
+  const resolved = await resolveLink($)
+  if (!('link' in resolved)) {
+    throw new LinkError(resolved.hint)
   }
+  const link = resolved.link
   let response
   try {
-    response = await $.http.fetch(`${link.baseUrl}${path}`, { method, headers: { authorization: `Bearer ${link.token}` } })
+    response = await $.http.fetch(`${link.baseUrl}${path}`, { method, headers: { authorization: `Bearer ${link.token}`, [ROOT_HEADER]: encodeURIComponent(link.root) } })
   } catch {
     throw new LinkError('The Claude Link daemon is not running on this machine (start it with "claude-link serve").')
   }

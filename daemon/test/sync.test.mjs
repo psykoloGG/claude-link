@@ -13,9 +13,18 @@ const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'claud
 const PROJECT_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
+// A synthetic HOME next to the link home, so nothing reads the real one
+// (Desktop session titles, ~/.claude).
+function envFor(home) {
+  const env = { ...process.env, CLAUDE_LINK_HOME: home, HOME: path.join(path.dirname(home), 'user-home') }
+  delete env.CLAUDE_CONFIG_DIR
+  delete env.CLAUDE_LINK_PROFILES_HOME
+  return env
+}
+
 function run(home, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, CLAUDE_LINK_HOME: home } })
+    const child = spawn(process.execPath, [CLI, ...args], { env: envFor(home) })
     let output = ''
     child.stdout.on('data', data => {
       output += data
@@ -80,7 +89,7 @@ test('two daemons sync chats both ways and append incrementally', async t => {
   // The laptop has a build of the daemon and mod; the desktop has none yet.
   await run(homes.laptop, ['publish', '--from', PROJECT_ROOT])
 
-  const daemons = Object.values(homes).map(home => spawn(process.execPath, [CLI, 'serve'], { env: { ...process.env, CLAUDE_LINK_HOME: home }, stdio: 'ignore' }))
+  const daemons = Object.values(homes).map(home => spawn(process.execPath, [CLI, 'serve'], { env: envFor(home), stdio: 'ignore' }))
   t.after(async () => {
     for (const daemon of daemons) {
       daemon.kill()
